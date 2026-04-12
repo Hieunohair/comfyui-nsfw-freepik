@@ -1,0 +1,5 @@
+# ComfyUI NSFW Freepik - Dependencies
+# Install with: pip install -r requirements.txt
+
+nsfw-image-detector
+
