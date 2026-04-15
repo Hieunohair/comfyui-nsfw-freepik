@@ -5,20 +5,17 @@ Detects NSFW content using `nsfw_image_detector` (NSFWDetector).
 
 Features:
 - Detects NSFW probabilities per image (uses NSFWLevel.LOW from predict_proba)
-- Saves images through the node
 - Blocks workflow when LOW probability is greater than or equal to threshold (default 0.5)
 """
 
 import os
 import json
-import datetime
 from enum import Enum
 import torch
 from PIL import Image
 
 from nsfw_image_detector import NSFWDetector
 
-import folder_paths
 from server import PromptServer
 from nodes import interrupt_processing
 
@@ -70,16 +67,11 @@ class NSFWCheck:
                         "step": 0.05,
                         "display": "slider",
                         "tooltip": (
-                            "Chặn và lưu prefix blocked nếu NSFWLevel.LOW >= giá trị này. "
-                            "Mặc định 0.5: low >= 0.5 là blocked."
+                            "Chặn workflow nếu NSFWLevel.LOW >= giá trị này. "
+                            "Mặc định 0.5: low >= 0.5 sẽ bị chặn."
                         ),
                     },
                 ),
-            },
-            "optional": {
-                "save_dir": ("STRING", {"default": "nsfw_guard/blocked"}),
-                "save_all_images": ("BOOLEAN", {"default": True}),
-                "interrupt_on_nsfw": ("BOOLEAN", {"default": True}),
             },
         }
 
@@ -104,19 +96,6 @@ class NSFWCheck:
                 NSFWCheck._detector = NSFWDetector(dtype=torch.float32, device="cpu")
 
         return NSFWCheck._detector
-
-    def _resolve_save_dir(self, save_dir: str) -> str:
-        base = None
-        if hasattr(folder_paths, "get_output_directory"):
-            base = folder_paths.get_output_directory()
-        elif hasattr(folder_paths, "output_directory"):
-            base = folder_paths.output_directory
-        else:
-            base = os.getcwd()
-
-        if os.path.isabs(save_dir):
-            return save_dir
-        return os.path.join(base, save_dir)
 
     def _normalize_prob_key(self, k) -> str:
         # predict_proba uses enum keys like NSFWLevel.LOW; str(k) is not "low".
@@ -169,18 +148,12 @@ class NSFWCheck:
         self,
         image: torch.Tensor,
         threshold: float = 0.5,
-        save_dir: str = "nsfw_guard/blocked",
-        save_all_images: bool = True,
-        interrupt_on_nsfw: bool = True,
     ):
         detector = self._get_detector()
 
         batch_size = image.shape[0]
 
         results = []
-        saved_dir_abs = self._resolve_save_dir(save_dir)
-        os.makedirs(saved_dir_abs, exist_ok=True)
-        run_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
         nsfw_detected = False
         max_low_score = 0.0
@@ -214,19 +187,6 @@ class NSFWCheck:
             if blocked:
                 nsfw_detected = True
 
-            saved_path = None
-            if save_all_images:
-                try:
-                    prefix = "blocked" if blocked else "passed"
-                    # Ghi cả threshold đang dùng để tránh nhầm (blocked ⇔ low >= threshold tại runtime).
-                    filename = (
-                        f"{prefix}_thr_{threshold:.6f}_low_{low_score:.6f}_{run_ts}_i{i}.png"
-                    )
-                    saved_path = os.path.join(saved_dir_abs, filename)
-                    pil_image.save(saved_path, format="PNG")
-                except Exception as e:
-                    print(f"[NSFW Freepik] Failed to save image i{i}: {e}")
-
             results.append(
                 {
                     "index": i,
@@ -235,25 +195,15 @@ class NSFWCheck:
                     "blocked": blocked,
                     "is_nsfw_flag": is_nsfw_flag,
                     "probabilities": probs,
-                    "saved_path": saved_path,
                 }
             )
 
-        if nsfw_detected and interrupt_on_nsfw:
+        if nsfw_detected:
             error = NSFWContentError(
                 prediction="nsfw",
                 confidence=max_low_score,
                 threshold=threshold,
             )
-
-            blocked_saved_path = None
-            try:
-                for r in results:
-                    if r.get("blocked") and r.get("saved_path"):
-                        blocked_saved_path = r.get("saved_path")
-                        break
-            except Exception:
-                blocked_saved_path = None
 
             PromptServer.instance.send_sync(
                 "nsfw_guard.content_blocked",
@@ -262,7 +212,6 @@ class NSFWCheck:
                     "prediction": "nsfw",
                     "confidence": max_low_score,
                     "threshold": threshold,
-                    "saved_path": blocked_saved_path,
                     "results": results,
                     "message": str(error),
                 },
