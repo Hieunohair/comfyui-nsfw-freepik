@@ -16,8 +16,19 @@ from PIL import Image
 
 from nsfw_image_detector import NSFWDetector
 
+import folder_paths
 from server import PromptServer
 from nodes import interrupt_processing
+
+HF_MODEL_ID = "Freepik/nsfw_image_detector"
+LOCAL_MODEL_DIR = os.path.join(folder_paths.models_dir, "nsfw_freepik")
+
+
+def _model_source() -> str:
+    if os.path.isfile(os.path.join(LOCAL_MODEL_DIR, "config.json")):
+        return LOCAL_MODEL_DIR
+    print(f"[NSFW Freepik] {LOCAL_MODEL_DIR} not found, downloading {HF_MODEL_ID} from Hugging Face")
+    return HF_MODEL_ID
 
 
 class NSFWContentError(Exception):
@@ -84,16 +95,18 @@ class NSFWCheck:
         if NSFWCheck._detector is not None:
             return NSFWCheck._detector
 
+        model_name = _model_source()
+
         # Prefer requested config (bfloat16 on cuda). Fall back if unsupported.
         try:
-            NSFWCheck._detector = NSFWDetector(dtype=torch.bfloat16, device="cuda")
+            NSFWCheck._detector = NSFWDetector(model_name=model_name, dtype=torch.bfloat16, device="cuda")
         except Exception as e1:
             print(f"[NSFW Freepik] Failed init cuda+bfloat16, falling back: {e1}")
             try:
-                NSFWCheck._detector = NSFWDetector(dtype=torch.float16, device="cuda")
+                NSFWCheck._detector = NSFWDetector(model_name=model_name, dtype=torch.float16, device="cuda")
             except Exception as e2:
                 print(f"[NSFW Freepik] Failed init cuda+float16, falling back to CPU: {e2}")
-                NSFWCheck._detector = NSFWDetector(dtype=torch.float32, device="cpu")
+                NSFWCheck._detector = NSFWDetector(model_name=model_name, dtype=torch.float32, device="cpu")
 
         return NSFWCheck._detector
 
