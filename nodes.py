@@ -172,8 +172,9 @@ class NSFWCheck:
         max_low_score = 0.0
 
         for i in range(batch_size):
-            img_tensor = image[i]
-            img_np = (img_tensor.cpu().numpy() * 255).astype("uint8")
+            # VAE Qwen Image 2.1 trả RGBA (4 kênh); ép 4 kênh thành "RGB" làm detector thấy ảnh nhiễu
+            img_tensor = image[i][..., :3].float().clamp(0.0, 1.0)
+            img_np = (img_tensor.cpu().numpy() * 255).round().astype("uint8")
             pil_image = Image.fromarray(img_np, mode="RGB")
 
             probs_raw = detector.predict_proba(pil_image)
